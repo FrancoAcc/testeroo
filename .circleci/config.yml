@@ -1,0 +1,304 @@
+---
+version: 2.1
+
+# ORBS ----------------------------------------------------
+orbs:
+  slack: circleci/slack@4.8.3
+  aws-cli: circleci/aws-cli@2.1.0
+
+# EXECUTORS -----------------------------------------------
+executors:
+  small:
+    resource_class: small
+    docker:
+      - image: cimg/ruby:2.7.5
+  medium:
+    working_directory: /opt/app/src
+    resource_class: medium+
+    docker:
+      - image: cimg/ruby:2.7.5
+    environment:
+      APP_ENV: test
+  build:
+    parameters:
+      mysql_version:
+        type: string
+        default: 8.0.27
+      mysql_command:
+        type: string
+        default: ""
+      ruby_version:
+        type: string
+      convenience_image_version:
+        type: string
+    resource_class: xlarge
+    docker:
+      - image: <<parameters.convenience_image_version>>/ruby:<<parameters.ruby_version>>
+      - image: cimg/mysql:<<parameters.mysql_version>>
+        command: << parameters.mysql_command >>
+        environment:
+          MYSQL_ALLOW_EMPTY_PASSWORD: true
+      - image: redis:5.0.14-alpine
+    environment:
+      APP_ENV: test
+
+# ALIASES -------------------------------------------------
+aliases:
+  - &announce_if_failure
+    slack/notify:
+      event: fail
+      custom: |
+        {
+          "blocks": [
+            {
+              "type": "header",
+              "text": {
+                "type": "plain_text",
+                "text": ":x: Importer Deploy Job Failed: ${CIRCLE_JOB}",
+                "emoji": true
+              }
+            },
+            {
+              "type": "section",
+              "fields": [
+                {
+                  "type": "mrkdwn",
+                  "text": "*Committer*:\n$CIRCLE_USERNAME"
+                },
+                {
+                  "type": "mrkdwn",
+                  "text": "*Git SHA*:\n<https://github.com/KennaSecurity/kenna-cli/commit/$CIRCLE_SHA1|${CIRCLE_SHA1:0:7}>"
+                }
+              ]
+            },
+            {
+              "type": "actions",
+              "elements": [
+                {
+                  "type": "button",
+                  "text": {
+                    "type": "plain_text",
+                    "text": "View Job"
+                  },
+                  "url": "{CIRCLE_BUILD_URL}"
+                }
+              ]
+            }
+          ]
+        }
+      branch_pattern: ^master$
+      channel: team_gastro_alerts
+
+  - &announce_deploy
+    slack/notify:
+      event: always
+      custom: |
+        {
+          "blocks": [
+            {
+              "type": "header",
+              "text": {
+                "type": "plain_text",
+                "text": "Building and Deploying Importer :rocket:",
+                "emoji": true
+              }
+            },
+            {
+              "type": "section",
+              "fields": [
+                {
+                  "type": "mrkdwn",
+                  "text": "*Committer*:\n$CIRCLE_USERNAME"
+                },
+                {
+                  "type": "mrkdwn",
+                  "text": "*Git SHA*:\n<https://github.com/KennaSecurity/kenna-cli/commit/$CIRCLE_SHA1|${CIRCLE_SHA1:0:7}>"
+                }
+              ]
+            },
+            {
+              "type": "actions",
+              "elements": [
+                {
+                  "type": "button",
+                  "text": {
+                    "type": "plain_text",
+                    "text": "View Workflow"
+                  },
+                  "url": "https://app.circleci.com/pipelines/workflows/${CIRCLE_WORKFLOW_ID}"
+                }
+              ]
+            }
+          ]
+        }
+      branch_pattern: ^master$
+      channel: importer_service
+
+  - &env
+    env:
+      description: Environment to deploy to
+      type: enum
+      default: ops-test
+      enum:
+        - ops-test
+        - ops-test2
+        - kenna-in-prod
+        - trial1-us
+        - trial1-eu
+        - kenna-us-prod3
+        - labs-us
+        - sandbox-eu
+        - stg1-us
+        - inf-prod1
+        - cisco-live-prod
+        - wells-us-prod
+
+  - &filters_master
+    filters:
+      branches:
+        only: master
+
+# COMMANDS ----------------------------------------------
+commands:
+  checkout_and_cache:
+    parameters:
+      version:
+        type: string
+    steps:
+      - restore_cache:
+          name: restoring source code cache
+          keys:
+            - << parameters.version >>-source-{{ .Branch }}-
+            - << parameters.version >>-source-
+      - checkout
+      - save_cache:
+          name: saving source code cache
+          paths:
+            - ".git"
+          key: << parameters.version >>-source-{{ .Branch }}-
+
+  setup:
+    parameters:
+      version:
+        type: string
+    steps:
+      # - restore_cache:
+      #     name: Restoring rubygems cache
+      #     keys:
+      #       - << parameters.version >>-rubygems-ruby-2.5.9-{{ checksum "Gemfile.lock" }}
+      - run:
+          name: Install bundler
+          command: gem install bundler -v $(tail -n1 Gemfile.lock)
+      - run:
+          name: Install Ruby gems
+          command: |
+            pwd
+            GEM_PATH=/home/circleci/.rubygems bundle install --local --jobs 2 --path vendor/bundle
+            a
+      - run:
+          name: Clean up unused gems
+          command: bundle clean
+      # - save_cache:
+      #     name: Saving rubygems cache
+      #     paths:
+      #       - vendor/bundle
+      #     key: << parameters.version >>-rubygems-ruby-2.5.9-{{ checksum "Gemfile.lock" }}
+
+  rubocop:
+    steps:
+      - run:
+          name: Run rubocop
+          command: |
+            # If master branch or rubocop config changed check all files, else only check changed files.
+            branch_changes=$(git diff --name-only origin/master)
+            if [[ "$CIRCLE_BRANCH" = "master" || "$branch_changes" =~ "rubocop" ]]; then
+              bundle exec rubocop
+            else
+              (echo "$branch_changes"; bundle exec rubocop --list-target-files) |\
+                sort | uniq -d | xargs --no-run-if-empty bundle exec rubocop --force-exclusion
+            fi
+
+  database_setup:
+    steps:
+      - run:
+          name: Install mysql client
+          command: sudo apt-get update --allow-releaseinfo-change && sudo apt-get install -y default-mysql-client
+      - run:
+          name: Setup shard_creator MySQL user and config/shard_creator.yml
+          command: |
+            mysql -u root -h 127.0.0.1 -e "CREATE USER 'shard_creator'@'%' IDENTIFIED BY 'ilikeshardsyesido17'"
+            mysql -u root -h 127.0.0.1 -e "GRANT CREATE USER ON *.* TO 'shard_creator'@'%' WITH GRANT OPTION"
+            mysql -u root -h 127.0.0.1 -e 'GRANT ALL PRIVILEGES ON `vuln_data_%`.* TO "shard_creator"@"%"'
+            cp vendor/circle/shard_creator.yml config/shard_creator.yml
+      - run:
+          name: Set up files, users, and databases for CI
+          command: |
+            make setup-ci-files setup-ci-users
+            GEM_PATH=/home/circleci/.rubygems make setup
+            make build-dbs drop-sharded-tables
+      - run:
+          name: Inject seed data
+          command: |
+            make seed
+
+  run_tests:
+    steps:
+      - run:
+          name: Run tests
+          environment:
+            RUN_COVERAGE_REPORT: true
+          # command: DEPRECATION_BEHAVIOR="record" bundle exec rspec spec --format documentation --format RspecJunitFormatter -o test_results/rspec.xml
+          command: bundle exec rspec spec --format documentation --format RspecJunitFormatter -o test_results/rspec.xml
+      - store_test_results:
+          path: test_results
+      - store_artifacts:
+          path: coverage
+          destination: coverage
+      - store_artifacts:
+          path: spec/deprecations
+          destination: deprecations
+
+# JOBS --------------------------------------------------
+jobs:
+  build:
+    parameters:
+      ruby_version:
+        type: string
+        default: 2.5.9
+      convenience_image_version:
+        type: string
+        default: cimg
+    executor:
+      name: build
+      mysql_version: 8.0.27
+      mysql_command: --default-authentication-plugin=mysql_native_password
+      ruby_version: << parameters.ruby_version >>
+      convenience_image_version: << parameters.convenience_image_version >>
+    working_directory: /mnt/ramdisk/importer
+    steps:
+      - checkout_and_cache:
+          version: v5
+      - setup:
+          version: v5
+      - rubocop
+      - database_setup
+      - run_tests
+      - *announce_if_failure
+
+### WORKFLOWS --------------------------------------------
+workflows:
+  version: 2
+  main:
+    jobs:
+      - build:
+          ruby_version: 2.7.5
+          context:
+            - artifactory
+            - slack
+      - build:
+          name: build-ruby-2.7.5
+          ruby_version: 2.7.5
+          convenience_image_version: circleci
+          context:
+            - artifactory
+            - slack

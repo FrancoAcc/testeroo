@@ -291,14 +291,9 @@ workflows:
   main:
     jobs:
       - build:
+          name: new-image
           ruby_version: 2.7.5
-          context:
-            - artifactory
-            - slack
       - build:
-          name: build-ruby-2.7.5
+          name: deprecated-image
           ruby_version: 2.7.5
           convenience_image_version: circleci
-          context:
-            - artifactory
-            - slack

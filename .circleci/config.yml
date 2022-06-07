@@ -31,8 +31,7 @@ jobs:
         default: cimg/ruby:2.7.5
     executor:
       name: build
-      ruby_version: << parameters.ruby_version >>
-      convenience_image_version: << parameters.convenience_image_version >>
+      image: << parameters.image >>
     steps:
       - checkout
       - setup

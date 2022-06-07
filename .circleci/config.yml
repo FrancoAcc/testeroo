@@ -15,10 +15,9 @@ executors:
         type: string
       convenience_image_version:
         type: string
-    docker:
-      - image: <<parameters.convenience_image_version>>/ruby:<<parameters.ruby_version>>
     resource_class: xlarge
     docker:
+      - image: <<parameters.convenience_image_version>>/ruby:<<parameters.ruby_version>>
     environment:
       APP_ENV: test
 

@@ -5,12 +5,6 @@ version: 2.1
 executors:
   build:
     parameters:
-      mysql_version:
-        type: string
-        default: 8.0.27
-      mysql_command:
-        type: string
-        default: ""
       ruby_version:
         type: string
       convenience_image_version:
@@ -18,15 +12,10 @@ executors:
     resource_class: xlarge
     docker:
       - image: <<parameters.convenience_image_version>>/ruby:<<parameters.ruby_version>>
-    environment:
-      APP_ENV: test
 
 # COMMANDS ----------------------------------------------
 commands:
   setup:
-    parameters:
-      version:
-        type: string
     steps:
       - run:
           name: Install bundler
@@ -41,24 +30,19 @@ jobs:
     parameters:
       ruby_version:
         type: string
-        default: 2.5.9
+        default: 2.7.5
       convenience_image_version:
         type: string
         default: cimg
     executor:
       name: build
-      mysql_version: 8.0.27
-      mysql_command: --default-authentication-plugin=mysql_native_password
       ruby_version: << parameters.ruby_version >>
       convenience_image_version: << parameters.convenience_image_version >>
     steps:
       - checkout
-      - setup:
-          version: v5
 
 ### WORKFLOWS --------------------------------------------
 workflows:
-  version: 2
   main:
     jobs:
       - build:

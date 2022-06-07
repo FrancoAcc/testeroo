@@ -5,13 +5,11 @@ version: 2.1
 executors:
   build:
     parameters:
-      ruby_version:
-        type: string
-      convenience_image_version:
+      image:
         type: string
     resource_class: xlarge
     docker:
-      - image: <<parameters.convenience_image_version>>/ruby:<<parameters.ruby_version>>
+      - image: <<parameters.image>>
 
 # COMMANDS ----------------------------------------------
 commands:
@@ -22,18 +20,15 @@ commands:
           command: gem install bundler -v $(tail -n1 Gemfile.lock)
       - run:
           name: Install Ruby gems
-          command: bundle install --local --jobs 2 --path vendor/bundle
+          command: bundle install --local
 
 # JOBS --------------------------------------------------
 jobs:
   build:
     parameters:
-      ruby_version:
+      image:
         type: string
-        default: 2.7.5
-      convenience_image_version:
-        type: string
-        default: cimg
+        default: cimg/ruby:2.7.5
     executor:
       name: build
       ruby_version: << parameters.ruby_version >>
@@ -48,9 +43,7 @@ workflows:
     jobs:
       - build:
           name: new-image
-          ruby_version: 2.7.5
-          convenience_image_version: cimg
+          image: cimg/ruby:2.7.5
       - build:
           name: deprecated-image
-          ruby_version: 2.7.5
-          convenience_image_version: circleci
+          image: circleci/ruby:2.7.5

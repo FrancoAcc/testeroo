@@ -52,14 +52,8 @@ jobs:
       convenience_image_version: << parameters.convenience_image_version >>
     working_directory: /mnt/ramdisk/importer
     steps:
-      - checkout_and_cache:
-          version: v5
       - setup:
           version: v5
-      - rubocop
-      - database_setup
-      - run_tests
-      - *announce_if_failure
 
 ### WORKFLOWS --------------------------------------------
 workflows:
